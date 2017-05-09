@@ -24,6 +24,10 @@ func (forceApi *ForceApi) Get(path string, params url.Values, out interface{}) e
 	return forceApi.request("GET", path, params, nil, out)
 }
 
+func (forceApi *ForceApi) GetStream(path string, params url.Values) (respBytes []byte, err error) {
+	return forceApi.streamRequest("GET", path, params, nil)
+}
+
 // Post issues a POST to the specified path with the given params and payload
 // and put the unmarshalled (json) result in the third parameter
 func (forceApi *ForceApi) Post(path string, params url.Values, payload, out interface{}) error {
@@ -140,6 +144,68 @@ func (forceApi *ForceApi) request(method, path string, params url.Values, payloa
 
 	// Sometimes no response is expected. For example delete and update. We still have to make sure an error wasn't returned.
 	return nil
+}
+
+func (forceApi *ForceApi) streamRequest(method, path string, params url.Values, payload interface{}) (respBytes []byte, err error) {
+	if err = forceApi.oauth.Validate(); err != nil {
+		return
+	}
+
+	// Build Uri
+	var uri bytes.Buffer
+	uri.WriteString(forceApi.oauth.InstanceUrl)
+	uri.WriteString(path)
+	if params != nil && len(params) != 0 {
+		uri.WriteString("?")
+		uri.WriteString(params.Encode())
+	}
+
+	// Build body
+	var body io.Reader
+	if payload != nil {
+
+		var jsonBytes []byte
+		jsonBytes, err = forcejson.Marshal(payload)
+		if err != nil {
+			return
+		}
+
+		body = bytes.NewReader(jsonBytes)
+	}
+
+	// Build Request
+	req, err := http.NewRequest(method, uri.String(), body)
+	if err != nil {
+		return
+	}
+
+	// Add Headers
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Accept", responseType)
+	req.Header.Set("Authorization", fmt.Sprintf("%v %v", "Bearer", forceApi.oauth.AccessToken))
+
+	// Send
+	forceApi.traceRequest(req)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	forceApi.traceResponse(resp)
+
+	// Sometimes the force API returns no body, we should catch this early
+	if resp.StatusCode == http.StatusNoContent {
+		return
+	}
+
+	respBytes, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return
+	}
+	forceApi.traceResponseBody(respBytes)
+
+	return
 }
 
 func (forceApi *ForceApi) traceRequest(req *http.Request) {
